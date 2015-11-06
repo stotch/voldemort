@@ -43,6 +43,7 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.io.JsonDecoder;
 import org.apache.commons.lang.mutable.MutableInt;
+import org.apache.log4j.Logger;
 
 import voldemort.client.ClientConfig;
 import voldemort.client.SocketStoreClientFactory;
@@ -90,6 +91,22 @@ public class VoldemortClientShell {
 
     private AdminClient adminClient;
 
+    protected static final Logger logger = Logger.getLogger(VoldemortClientShell.class)
+
+    protected final boolean isAdminClientDisabled;
+
+    private static final Map<String, String> commToProto;
+    static {
+        commToProto.put("get", "vold");
+        commToProto.put("getall", "vold");
+        commToProto.put("put", "vold");
+        commToProto.put("delete", "vold");
+        commToProto.put("preflist", "none");
+        commToProto.put("getmetadata", "admin");
+        commToProto.put("fetchkeys", "admin");
+        commToProto.put("fetch", "admin");
+    }
+
     protected VoldemortClientShell(BufferedReader commandReader,
                                    PrintStream commandOutput,
                                    PrintStream errorStream) {
@@ -113,7 +130,6 @@ public class VoldemortClientShell {
         try {
             factory = new SocketStoreClientFactory(clientConfig);
             client = factory.getStoreClient(storeName);
-            adminClient = new AdminClient(bootstrapUrl, new AdminClientConfig(), new ClientConfig());
 
             storeDef = StoreUtils.getStoreDef(factory.getStoreDefs(), storeName);
 
@@ -122,6 +138,15 @@ public class VoldemortClientShell {
         } catch(Exception e) {
             safeClose();
             Utils.croak("Could not connect to server: " + e.getMessage());
+        }
+
+        try {
+            adminClient = new AdminClient(bootstrapUrl, new AdminClientConfig(), clientConfig);
+        catch(Exception e) {
+            logger.debug(e);
+            isAdminClientDisabled = true;
+            commandOutput.println("Unable to connect to admin API. " +
+                                  "Admin commands will be unavailable. Type \"help\" for commands.");
         }
     }
 
@@ -340,18 +365,22 @@ public class VoldemortClientShell {
             } else if(line.toLowerCase().startsWith("getall")) {
                 processGetAll(line.substring("getall".length()));
             } else if(line.toLowerCase().startsWith("getmetadata")) {
-                String[] args = line.substring("getmetadata".length() + 1).split("\\s+");
-                int remoteNodeId = Integer.valueOf(args[0]);
-                String key = args[1];
-                Versioned<String> versioned = adminClient.metadataMgmtOps.getRemoteMetadata(remoteNodeId,
-                                                                                            key);
-                if(versioned == null) {
-                    commandOutput.println("null");
+                if (! isAdminClientDisabled) {
+                    String[] args = line.substring("getmetadata".length() + 1).split("\\s+");
+                    int remoteNodeId = Integer.valueOf(args[0]);
+                    String key = args[1];
+                    Versioned<String> versioned = adminClient.metadataMgmtOps.getRemoteMetadata(remoteNodeId,
+                                                                                                key);
+                    if(versioned == null) {
+                         commandOutput.println("null");
+                    } else {
+                        commandOutput.println(versioned.getVersion());
+                        commandOutput.print(": ");
+                        commandOutput.println(versioned.getValue());
+                        commandOutput.println();
+                    }
                 } else {
-                    commandOutput.println(versioned.getVersion());
-                    commandOutput.print(": ");
-                    commandOutput.println(versioned.getValue());
-                    commandOutput.println();
+                    commandOutput.print("Admin commands are disabled.");
                 }
             } else if(line.toLowerCase().startsWith("get")) {
                 processGet(line.substring("get".length()));
@@ -362,71 +391,79 @@ public class VoldemortClientShell {
                 Object key = tightenNumericTypes(jsonReader.read());
                 printNodeList(client.getResponsibleNodes(key), factory.getFailureDetector());
             } else if(line.toLowerCase().startsWith("fetchkeys")) {
-                String[] args = line.substring("fetchkeys".length() + 1).split("\\s+");
-                int remoteNodeId = Integer.valueOf(args[0]);
-                String storeName = args[1];
-                List<Integer> partititionList = parseCsv(args[2]);
-                Iterator<ByteArray> partitionKeys = adminClient.bulkFetchOps.fetchKeys(remoteNodeId,
-                                                                                       storeName,
-                                                                                       partititionList,
-                                                                                       null,
-                                                                                       false);
-
-                BufferedWriter writer = null;
-                try {
-                    if(args.length > 3) {
-                        writer = new BufferedWriter(new FileWriter(new File(args[3])));
-                    } else
-                        writer = new BufferedWriter(new OutputStreamWriter(commandOutput));
-                } catch(IOException e) {
-                    errorStream.println("Failed to open the output stream");
-                    e.printStackTrace(errorStream);
-                }
-                if(writer != null) {
-                    while(partitionKeys.hasNext()) {
-                        ByteArray keyByteArray = partitionKeys.next();
-                        StringBuilder lineBuilder = new StringBuilder();
-                        lineBuilder.append(ByteUtils.getString(keyByteArray.get(), "UTF-8"));
-                        lineBuilder.append("\n");
-                        writer.write(lineBuilder.toString());
+                if (! isAdminClientDisabled) {
+                    String[] args = line.substring("fetchkeys".length() + 1).split("\\s+");
+                    int remoteNodeId = Integer.valueOf(args[0]);
+                    String storeName = args[1];
+                    List<Integer> partititionList = parseCsv(args[2]);
+                    Iterator<ByteArray> partitionKeys = adminClient.bulkFetchOps.fetchKeys(remoteNodeId,
+                                                                                           storeName,
+                                                                                           partititionList,
+                                                                                           null,
+                                                                                           false);
+    
+                    BufferedWriter writer = null;
+                    try {
+                        if(args.length > 3) {
+                            writer = new BufferedWriter(new FileWriter(new File(args[3])));
+                        } else
+                            writer = new BufferedWriter(new OutputStreamWriter(commandOutput));
+                    } catch(IOException e) {
+                        errorStream.println("Failed to open the output stream");
+                        e.printStackTrace(errorStream);
                     }
-                    writer.flush();
+                    if(writer != null) {
+                        while(partitionKeys.hasNext()) {
+                            ByteArray keyByteArray = partitionKeys.next();
+                            StringBuilder lineBuilder = new StringBuilder();
+                            lineBuilder.append(ByteUtils.getString(keyByteArray.get(), "UTF-8"));
+                            lineBuilder.append("\n");
+                            writer.write(lineBuilder.toString());
+                        }
+                        writer.flush();
+                    }
+                } else {
+                    commandOutput.print("Admin commands are disabled.");
                 }
             } else if(line.toLowerCase().startsWith("fetch")) {
-                String[] args = line.substring("fetch".length() + 1).split("\\s+");
-                int remoteNodeId = Integer.valueOf(args[0]);
-                String storeName = args[1];
-                List<Integer> partititionList = parseCsv(args[2]);
-                Iterator<Pair<ByteArray, Versioned<byte[]>>> partitionEntries = adminClient.bulkFetchOps.fetchEntries(remoteNodeId,
-                                                                                                                      storeName,
-                                                                                                                      partititionList,
-                                                                                                                      null,
-                                                                                                                      false);
-                BufferedWriter writer = null;
-                try {
-                    if(args.length > 3) {
-                        writer = new BufferedWriter(new FileWriter(new File(args[3])));
-                    } else
-                        writer = new BufferedWriter(new OutputStreamWriter(commandOutput));
-                } catch(IOException e) {
-                    errorStream.println("Failed to open the output stream");
-                    e.printStackTrace(errorStream);
-                }
-                if(writer != null) {
-                    while(partitionEntries.hasNext()) {
-                        Pair<ByteArray, Versioned<byte[]>> pair = partitionEntries.next();
-                        ByteArray keyByteArray = pair.getFirst();
-                        Versioned<byte[]> versioned = pair.getSecond();
-                        StringBuilder lineBuilder = new StringBuilder();
-                        lineBuilder.append(ByteUtils.getString(keyByteArray.get(), "UTF-8"));
-                        lineBuilder.append("\t");
-                        lineBuilder.append(versioned.getVersion());
-                        lineBuilder.append("\t");
-                        lineBuilder.append(ByteUtils.getString(versioned.getValue(), "UTF-8"));
-                        lineBuilder.append("\n");
-                        writer.write(lineBuilder.toString());
+                if (! isAdminClientDisabled) {
+                    String[] args = line.substring("fetch".length() + 1).split("\\s+");
+                    int remoteNodeId = Integer.valueOf(args[0]);
+                    String storeName = args[1];
+                    List<Integer> partititionList = parseCsv(args[2]);
+                    Iterator<Pair<ByteArray, Versioned<byte[]>>> partitionEntries = adminClient.bulkFetchOps.fetchEntries(remoteNodeId,
+                                                                                                                          storeName,
+                                                                                                                          partititionList,
+                                                                                                                          null,
+                                                                                                                          false);
+                    BufferedWriter writer = null;
+                    try {
+                        if(args.length > 3) {
+                            writer = new BufferedWriter(new FileWriter(new File(args[3])));
+                        } else
+                            writer = new BufferedWriter(new OutputStreamWriter(commandOutput));
+                    } catch(IOException e) {
+                        errorStream.println("Failed to open the output stream");
+                        e.printStackTrace(errorStream);
                     }
-                    writer.flush();
+                    if(writer != null) {
+                        while(partitionEntries.hasNext()) {
+                            Pair<ByteArray, Versioned<byte[]>> pair = partitionEntries.next();
+                            ByteArray keyByteArray = pair.getFirst();
+                            Versioned<byte[]> versioned = pair.getSecond();
+                            StringBuilder lineBuilder = new StringBuilder();
+                            lineBuilder.append(ByteUtils.getString(keyByteArray.get(), "UTF-8"));
+                            lineBuilder.append("\t");
+                            lineBuilder.append(versioned.getVersion());
+                            lineBuilder.append("\t");
+                            lineBuilder.append(ByteUtils.getString(versioned.getValue(), "UTF-8"));
+                            lineBuilder.append("\n");
+                            writer.write(lineBuilder.toString());
+                        }
+                        writer.flush();
+                    }
+                } else {
+                    commandOutput.print("Admin commands are disabled.");
                 }
             } else if(line.startsWith("help")) {
                 commandOutput.println();
@@ -443,17 +480,17 @@ public class VoldemortClientShell {
                                       + "preflist key --- Get node preference list for given key.");
                 String metaKeyValues = voldemort.store.metadata.MetadataStore.METADATA_KEYS.toString();
                 commandOutput.println(PROMPT
-                                      + "getmetadata node_id meta_key --- Get store metadata associated "
+                                      + "getmetadata node_id meta_key --- (Admin command) Get store metadata associated "
                                       + "with meta_key from node_id. meta_key may be one of "
                                       + metaKeyValues.substring(1, metaKeyValues.length() - 1)
                                       + ".");
                 commandOutput.println(PROMPT
-                                      + "fetchkeys node_id store_name partitions <file_name> --- Fetch all keys "
+                                      + "fetchkeys node_id store_name partitions <file_name> --- (Admin command) Fetch all keys "
                                       + "from given partitions (a comma separated list) of store_name on "
                                       + "node_id. Optionally, write to file_name. "
                                       + "Use getmetadata to determine appropriate values for store_name and partitions");
                 commandOutput.println(PROMPT
-                                      + "fetch node_id store_name partitions <file_name> --- Fetch all entries "
+                                      + "fetch node_id store_name partitions <file_name> --- (Admin command) Fetch all entries "
                                       + "from given partitions (a comma separated list) of store_name on "
                                       + "node_id. Optionally, write to file_name. "
                                       + "Use getmetadata to determine appropriate values for store_name and partitions");
