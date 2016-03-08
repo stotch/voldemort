@@ -1,0 +1,55 @@
+{
+  "namespace": "voldemort.readonly.bnp.log",
+  "type": "record",
+  "name": "Summary",
+  "fields": [
+    {
+      {"name": "jobStart", "type": "timestamp-millis"},
+      {"name": "jobEnd", "type": "timestamp-millis"},
+      {"name": "hadoopExecutionQueued", "type": "timestamp-millis"},
+      {"name": "mapInputRecs", "type": "long"},
+      {"name": "mapOutputRecs", "type": "long"},
+      {"name": "reduceInputRecs", "type": "long"},
+      {"name": "reduceShuffleBytes", "type": "long"},
+      {"name": "mapStart", "type": "timestamp-millis"},
+      {"name": "mapEnd", "type": "timestamp-millis"},
+      {"name": "reduceStart", "type": "timestamp-millis"},
+      {"name": "reduceEnd", "type": "timestamp-millis"},
+      {"name": "checksumStart, "type": "timestamp-millis"},
+      {"name": "checksumEnd, "type": "timestamp-millis"},
+      {"name": "chmodStart, "type": "timestamp-millis"},
+      {"name": "chmodEnd, "type": "timestamp-millis"},
+      {
+        "name": "fetches",
+        "type": {
+          "type": "array",
+          "items": {
+            "name": "Datacenter"
+            "type": "record",
+            "fields": [
+              {"name": "fetchStart", "type": "timestamp-millis"},
+              {"name": "fetchEnd", "type": "timestamp-millis"},
+              {
+                "name": "nodeTimes",
+                "type": {
+                  "type": "array",
+                  "items": {
+                    {
+                      "name": "Node",
+                      "type": "record",
+                      "fields": [
+                        {"name": "nodeId", "type": "int"}
+                        {"name": "fetchStart", "type": "timestamp-millis"},
+                        {"name": "fetchEnd", "type": "timestamp-millis"}
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
